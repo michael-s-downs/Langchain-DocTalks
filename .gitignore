@@ -1,3 +1,10 @@
+#ignore VSCode
+.vscode
+
+# ignore the vector databases created from the button
+/PowerPlatformDB/*
+/WordDocVectorDB/*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

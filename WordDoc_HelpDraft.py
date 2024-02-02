@@ -16,19 +16,12 @@ load_dotenv()
 
 OPENAI_API_KEY= os.getenv("OPENAI_API_KEY")
 
-system_template = """You are an expert consultant in Microsoft Power Platform products.  
-Use the following pieces of context to answer the users question.
-Users will have access to Power BI, Power Apps, Power Pages and Power Automation but NOT to CoPilot Studio.
-Be aware that they will make their own custom, Generative AI Chatbot functions with Python Scripts rather than using a CoPilot, and will need to integrate
-that part of their solutions with your other suggestions.
-If you don't know the answer to user's question, just say that you don't know, don't try to make up an answer.
+system_template = """Use the following pieces of context to answer the users question.  The context is help information to teach users how to use a specific PowerBI report called
+the Outlet Query Tool.  It describes report filters which are found on different tabs, other navigation elements, FAQs, and How-To sections for users.  Every answer you give should
+try to include a click path for the report interface that the user can follow if you can put it together from the context. If you don't know the answer to user's question, just say that you don't know, don't try to make up an answer.
+----------------
+{context}
 """
-
-messages = [
-    SystemMessagePromptTemplate.from_template(system_template),
-    HumanMessagePromptTemplate.from_template("{question}"),
-]
-prompt = ChatPromptTemplate.from_messages(messages)
 
 #Some Global Variables for finding the database (for queries or refreshing it)
 ABS_PATH: str = os.path.dirname(os.path.abspath(__file__))
@@ -68,26 +61,37 @@ def main():
         vectordb.persist()
         st.success("Data Refreshed!")
     st.subheader('Ask a Question, get the Answer with Source Document Links.')
-    prompt = st.text_input("Ask a question (query/prompt)")
+    user_question = st.text_input("Ask a question (query/prompt)")
+    messages = [
+        SystemMessagePromptTemplate.from_template(system_template),
+        HumanMessagePromptTemplate.from_template(user_question)
+    ]
+    prompt_template = ChatPromptTemplate.from_messages(messages)
+
     if st.button("Submit Query", type="primary"):
 
         # Reference the Refreshed DB.
         vectordb = Chroma(embedding_function=openai_embeddings, persist_directory=DB_DIR)
 
         # Create a retriever from the Chroma vector database
-        retriever = vectordb.as_retriever(search_kwargs={"k": 3})
+        retriever = vectordb.as_retriever(search_kwargs={"k": 10})
 
         # Use a ChatOpenAI model
         llm = ChatOpenAI(model_name='gpt-3.5-turbo')
 
         # Create a RetrievalQA from the model and retriever
-        qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, return_source_documents=True)
+        qa = RetrievalQA.from_chain_type(
+            llm=llm, 
+            chain_type="stuff",
+            chain_type_kwargs={"prompt": prompt_template},
+            retriever=retriever, 
+            return_source_documents=True)
 
         # Run the prompt and return the response
-        response = qa(prompt)
+        response = qa(str(prompt_template))
         st.subheader("Answer:")
         st.write(response["result"])
-        st.subheader("Top 3 Sources Used:")
+        st.subheader("Top 30 Sources Used:")
         for source_doc in response["source_documents"]:
             category = source_doc.metadata["category"]
             text = source_doc.page_content

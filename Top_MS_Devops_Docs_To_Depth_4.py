@@ -7,9 +7,6 @@ from langchain.chat_models import ChatOpenAI
 from langchain_community.document_loaders.recursive_url_loader import RecursiveUrlLoader
 from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain.embeddings import OpenAIEmbeddings
-from langchain.prompts.chat import (ChatPromptTemplate,
-                                    HumanMessagePromptTemplate,
-                                    SystemMessagePromptTemplate)
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Chroma
 
@@ -18,17 +15,6 @@ load_dotenv()
 
 OPENAI_API_KEY= os.getenv("OPENAI_API_KEY")
 
-system_template = """You are an expert consultant in Microsoft Devops products.  
-Use the following pieces of context to answer the users question.
-If you don't know the answer to user's question, just say that you don't know, don't try to make up an answer.
-"""
-
-messages = [
-    SystemMessagePromptTemplate.from_template(system_template),
-    HumanMessagePromptTemplate.from_template("{question}"),
-]
-prompt = ChatPromptTemplate.from_messages(messages)
-
 #Some Global Variables for finding the database (for queries or refreshing it)
 ABS_PATH: str = os.path.dirname(os.path.abspath(__file__))
 DB_DIR: str = os.path.join(ABS_PATH, "DevOpsDB")
@@ -36,6 +22,7 @@ DB_DIR: str = os.path.join(ABS_PATH, "DevOpsDB")
 # Specify the maximum depth to crawl top-level URLs, 3 = top-level + 2 layers deep.
 max_depth = 3
 
+# A list in case we find other useful base URLs to add to the sim-search vector DB...
 urls = [
     "https://learn.microsoft.com/en-us/azure/devops"
 ]
@@ -86,14 +73,14 @@ def main():
             vectordb.persist()
         st.success("Data Refreshed!")
     st.subheader('Ask a Question, get the Answer with Source Document Links.')
-    prompt = st.text_input("Ask a question (query/prompt)")
+    user_question = st.text_input("Ask a question (query/prompt)")
     if st.button("Submit Query", type="primary"):
 
         # Reference the Refreshed DB.
         vectordb = Chroma(embedding_function=openai_embeddings, persist_directory=DB_DIR)
 
         # Create a retriever from the Chroma vector database
-        retriever = vectordb.as_retriever(search_kwargs={"k": 3})
+        retriever = vectordb.as_retriever(search_kwargs={"k": 10})
 
         # Use a ChatOpenAI model
         llm = ChatOpenAI(model_name='gpt-3.5-turbo')
@@ -102,10 +89,10 @@ def main():
         qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, return_source_documents=True)
 
         # Run the prompt and return the response
-        response = qa(prompt)
+        response = qa(user_question)
         st.subheader("Answer:")
         st.write(response["result"])
-        st.subheader("Top 3 Sources Used:")
+        st.subheader("Sources Used:")
         for source_doc in response["source_documents"]:
             title = source_doc.metadata["title"]
             sourceLink = source_doc.metadata["source"]

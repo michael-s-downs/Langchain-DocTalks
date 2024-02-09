@@ -82,8 +82,8 @@ def main():
         # Create a retriever from the Chroma vector database
         retriever = vectordb.as_retriever(search_kwargs={"k": 10})
 
-        # Use a ChatOpenAI model
-        llm = ChatOpenAI(model_name='gpt-3.5-turbo')
+        # Use a ChatOpenAI model, DEFAULT temp...
+        llm = ChatOpenAI(model_name='gpt-3.5-turbo', temperature=0)
 
         # Create a RetrievalQA from the model and retriever
         qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, return_source_documents=True)

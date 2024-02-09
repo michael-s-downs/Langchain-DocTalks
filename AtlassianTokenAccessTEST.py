@@ -10,6 +10,14 @@ from langchain.embeddings import OpenAIEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Chroma
 from langchain.docstore.document import Document
+import json
+
+# load config: update or create username and api_key in config.json
+with open('config.json', 'r') as config_file:
+    config = json.load(config_file)
+userName = config["username"]
+api_key = config["api_key"]
+
 
 # Load environment variables from .env file (Optional)
 load_dotenv()
@@ -20,6 +28,7 @@ OPENAI_API_KEY= os.getenv("OPENAI_API_KEY")
 ABS_PATH: str = os.path.dirname(os.path.abspath(__file__))
 DB_DIR: str = os.path.join(ABS_PATH, "AspirentWikiDB")
 url = "https://aspirentconsulting.atlassian.net/wiki"
+
 
 # Create OpenAI embeddings
 openai_embeddings = OpenAIEmbeddings()
@@ -74,8 +83,8 @@ def main():
 
             loader = CustomConfluenceLoader(
                 url=url,
-                username="michael.downs@aspirent.com",
-                api_key="ATATT3xFfGF0uokvR3f-pyn-gXonAZ-3Qz26lFVY3Xlp6P9aTyFnq1Bv5-fxc1rqG2tkHLYzNax51devJ1_H7jRWGqQoefDhYvhXzUQTAB9PlMQZXjaatPTBz8DDK8DZhQfYDD1ovSGv1gnaYp0AzHM4lGpWmb3SGFFyVm_c3aGMo-24B3WLD_s=6DBAD89B"
+                username=userName,
+                api_key=api_key
             )
             data = loader.load(space_key="CS", include_attachments=False, limit=50)  #starting with include attachments as false
 

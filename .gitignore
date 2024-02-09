@@ -1,3 +1,9 @@
+#Word files
+*.docx
+
+#config file
+config.json
+
 #ignore VSCode
 .vscode
 

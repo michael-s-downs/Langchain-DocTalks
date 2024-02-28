@@ -1,4 +1,5 @@
 import os
+import shutil
 import streamlit as st
 from bs4 import BeautifulSoup as Soup
 from dotenv import load_dotenv
@@ -95,8 +96,8 @@ def main():
 
             docs = text_splitter.split_documents(data)
 
-            # Filter complex metadata from the documents
-            #filtered_documents = filter_complex_metadata(docs)
+            if os.path.exists(DB_DIR) and os.path.isdir(DB_DIR):
+                shutil.rmtree(DB_DIR)
 
             # Create a Chroma vector database from the documents
             vectordb = Chroma.from_documents(documents=docs, 
@@ -115,14 +116,10 @@ def main():
         retriever = vectordb.as_retriever(search_kwargs={"k": 30})
 
         # Use a ChatOpenAI model
-        llm = ChatOpenAI(model_name='gpt-3.5-turbo')
+        llm = ChatOpenAI(model_name='gpt-4-turbo-preview')
 
         # Create a RetrievalQA from the model and retriever
         qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, return_source_documents=True)
-        #tokenLength = qa.extra.extracted_content() 
-        #st.subheader("Pre-Submission Token Check:")
-        #st.write("token length: "+ tokenLength)
-        #st.write("token content: " + qa.extracted_content())
 
         # Run the prompt and return the response
         response = qa(user_question)

@@ -30,6 +30,7 @@ AZURE_OPENAI_API_SUBSCRIPTION_KEY = os.getenv("AZURE_OPENAI_API_SUBSCRIPTION_KEY
 AZURE_OPENAI_API_URL = os.getenv("AZURE_OPENAI_API_URL")
 AZURE_OPENAI_API_DEPLOYMENT_ID = os.getenv("AZURE_OPENAI_API_DEPLOYMENT_ID")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
+AZURE_OPENAI_API_EMBEDDING_DEPLOYMENT_ID=os.getenv("AZURE_OPENAI_API_EMBEDDING_DEPLOYMENT_ID")
 
 #Some Global Variables for finding the database (for queries or refreshing it)
 ABS_PATH: str = os.path.dirname(os.path.abspath(__file__))
@@ -49,34 +50,43 @@ class CustomEmbeddings(Embeddings):
         vectors = self.api_client.generate_vectors(texts)
         return vectors
 
+    def embed_documents(self, documents: List[str]) -> List[np.ndarray]:
+        #texts = [doc.page_content for doc in documents]  
+        return self.embed(documents)
+
+    def embed_query(self, query: str) -> np.ndarray:
+        return self.embed([query])[0]
+
 class TCCC_AzureOpenAI_APIClient:
-    def __init__(self, api_key, api_url, api_depId, api_version):
+    def __init__(self, api_key, api_url, api_mod_depId, api_embed_depId, api_version):
         self.api_key = api_key 
         self.api_url = api_url
-        self.api_depId = api_depId
+        self.api_mod_depId = api_mod_depId
+        self.api_embed_depId = api_embed_depId
         self.api_version = api_version
 
-    #sample URL:  https://apim-emt-aip-prod-01.azure-api.net/openai/deployments/{deployment-id}/embeddings?api-version={api-version}
+    #sample URL:  https://apim-emt-aip-prod-01.azure-api.net/openai/deployments/{embed-deployment-id}/embeddings?api-version={api-version}
     def generate_vectors(self, texts):
         headers = {
             "Ocp-Apim-Subscription-Key": f"{self.api_key}"
         }
-        data = {"texts": texts}
+        data = {"input": texts}
         
-        response = requests.post(f"{self.api_url}/deployments/{self.api_depId}/embeddings?api-version={self.api_version}", json=data, headers=headers)
+        response = requests.post(f"{self.api_url}/deployments/{self.api_embed_depId}/embeddings?api-version={self.api_version}", json=data, headers=headers)
         response.raise_for_status()
         
-        vectors = response.json()["vectors"]
-        return [np.array(v) for v in vectors]
+        vectors = response.json()["data"]
+        return [v["embedding"] for v in vectors]
 		
-	#sample URL:  https://apim-emt-aip-prod-01.azure-api.net/openai/deployments/gpt-35-16/chat/completions?api-version=2024-02-15-preview
+	#sample URL:  https://apim-emt-aip-prod-01.azure-api.net/openai/deployments/{mod-deployment-id}/chat/completions?api-version={api-version}
     #def chat_completion():	#<-- complete this definition later
 
 #Create Custom api_client
 api_client = TCCC_AzureOpenAI_APIClient(
     api_key=AZURE_OPENAI_API_SUBSCRIPTION_KEY, 
     api_url=AZURE_OPENAI_API_URL, 
-    api_depId = AZURE_OPENAI_API_DEPLOYMENT_ID,
+    api_mod_depId = AZURE_OPENAI_API_DEPLOYMENT_ID,
+    api_embed_depId = AZURE_OPENAI_API_EMBEDDING_DEPLOYMENT_ID,
     api_version = AZURE_OPENAI_API_VERSION
     )
 
@@ -124,7 +134,7 @@ def extract_content_and_images(html):
 
 def main():
     # Set the title and subtitle of the app
-    st.title("🦜🔗 Chat with Query Tool Confluence")
+    st.title("🦜🔗 CHAT: OQT Wiki via COKE-API")
     st.image('./assets/Wiki-Pikture.png')
     st.write('Re/Create your local Vector-Data...')
     if st.button("Refresh Data"):    
@@ -147,16 +157,16 @@ def main():
             if os.path.exists(DB_DIR) and os.path.isdir(DB_DIR):
                 shutil.rmtree(DB_DIR)
 
-            # Create a Chroma vector database from the documents
-            vectordb = Chroma.from_documents(documents=docs, 
-                                            embedding=openai_embeddings,
-                                            persist_directory=DB_DIR)
-            
-            # #NEW SECTION 
-            # custom_embeddings = CustomEmbeddings(api_client)
+            # # Create a Chroma vector database from the documents
             # vectordb = Chroma.from_documents(documents=docs, 
-            #                     embedding=custom_embeddings,
-            #                     persist_directory=DB_DIR)
+            #                                 embedding=openai_embeddings,
+            #                                 persist_directory=DB_DIR)
+            
+            # NEW SECTION 
+            custom_embeddings = CustomEmbeddings(api_client=api_client)
+            vectordb = Chroma.from_documents(documents=docs, 
+                                embedding=custom_embeddings,
+                                persist_directory=DB_DIR)
 
             vectordb.persist()
         st.success("Data Refreshed!")

@@ -161,8 +161,7 @@ class TCCC_AzureOpenAI_APIClient:
         answer = choice["message"]["content"]
 
         return {
-            "result": answer,
-            "source_documents": []
+            "result": answer
         }
 
 

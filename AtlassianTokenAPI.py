@@ -1,23 +1,24 @@
 import os
 import shutil
-from typing import List
+from typing import Any, List, Dict, Optional
 from langchain_core.embeddings import Embeddings
 import streamlit as st
 from bs4 import BeautifulSoup as Soup
 from dotenv import load_dotenv
-from langchain.chains import RetrievalQA
-from langchain.chat_models import ChatOpenAI
+from langchain.chains.retrieval_qa.base import BaseRetrievalQA
+from langchain_community.chat_models import ChatOpenAI
 from langchain_community.document_loaders import ConfluenceLoader
 from langchain_community.vectorstores.utils import filter_complex_metadata
-from langchain_community.embeddings import OpenAIEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.vectorstores import Chroma
+from langchain_community.vectorstores import Chroma
 from langchain.docstore.document import Document
 import json
 import requests
 import numpy as np
+from langchain_core.callbacks.manager import CallbackManagerForChainRun
 
-# load config: update or create username and api_key in config.json
+#VARIABLES-SETUP SECTION:  Config (non-secure info) and Environment (Secured info) 
+# load config: update or create Atlassian Wiki username and its api_key in config.json TODO:  move api_key to Environment
 with open('config.json', 'r') as config_file:
     config = json.load(config_file)
 userName = config["username"]
@@ -32,14 +33,65 @@ AZURE_OPENAI_API_DEPLOYMENT_ID = os.getenv("AZURE_OPENAI_API_DEPLOYMENT_ID")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
 AZURE_OPENAI_API_EMBEDDING_DEPLOYMENT_ID=os.getenv("AZURE_OPENAI_API_EMBEDDING_DEPLOYMENT_ID")
 
-#Some Global Variables for finding the database (for queries or refreshing it)
+#Other Global Variables for finding and creating the docker-onboard ChromaDB (for queries or refreshing it)
 ABS_PATH: str = os.path.dirname(os.path.abspath(__file__))
 DB_DIR: str = os.path.join(ABS_PATH, "AspirentWikiDB")
 url = "https://aspirentconsulting.atlassian.net/wiki"
 
+#CUSTOM CLASSES, WRAPPERS, EXTENSIONS, DEFs SECTION. MOST WRAPPERS ARE TO CONSUME OUR OWN API_CLIENT:
+class CustomRetrievalQA(BaseRetrievalQA):
+    def __init__(
+            self, 
+            api_client: Optional[Any] = None, 
+            llm: Optional[Any] = None, 
+            chain_type: Optional[str] = None, 
+            retriever: Optional[Any] = None, 
+            return_source_documents: Optional[bool] = None, 
+            **kwargs):
+        super().__init__(**kwargs)
 
-# Create OpenAI embeddings  WE WILL REPLACE THIS WITH A CUSTOM WRAPPER OBJECT THAT TAKES OUR API_CLIENT AND USES IT...
-openai_embeddings = OpenAIEmbeddings()
+        self.api_client = api_client
+        self.llm = llm
+        self.chain_type = chain_type
+        self.retriever = retriever
+        self.return_source_documents = return_source_documents
+
+    #Pydantic Voodoo to disable its Pedantry for this class which inherits from a Pydantic Model
+    class Config:
+        arbitrary_types_allowed = True
+        extra = "allow"
+        
+    #Existing abstract methods and dummy attributes that we must 'implement' in our wrapper but don't actually need...
+    def _get_docs(
+        self,
+        question: str,
+        *,
+        run_manager: CallbackManagerForChainRun,
+    ) -> List[Document]:
+        """Get documents to do question answering over."""
+
+    def _aget_docs(self, query: str) -> List[Document]: 
+         pass
+
+    def _call(
+        self,
+        inputs: Dict[str, Any],
+        run_manager: Optional[CallbackManagerForChainRun] = None,  #we do not use the run_manager but it is part of the signature...
+    ) -> Dict[str, Any]:
+        
+        question = inputs[self.input_key]
+        docs = self.retriever.get_relevant_documents(question)
+
+        # Generate context from documents
+        context = "\n\n".join(doc.page_content for doc in docs)
+
+        #this should give us back a dictionary with an answer and a blank list of Documents
+        answer = self.api_client.chat_completion(question, context)
+        
+        if self.return_source_documents:
+            return {self.output_key: answer, "source_documents": docs}
+        else:
+            return {self.output_key: answer}    
 
 class CustomEmbeddings(Embeddings):
 
@@ -65,7 +117,6 @@ class TCCC_AzureOpenAI_APIClient:
         self.api_embed_depId = api_embed_depId
         self.api_version = api_version
 
-    #sample URL:  https://apim-emt-aip-prod-01.azure-api.net/openai/deployments/{embed-deployment-id}/embeddings?api-version={api-version}
     def generate_vectors(self, texts):
         headers = {
             "Ocp-Apim-Subscription-Key": f"{self.api_key}"
@@ -78,18 +129,41 @@ class TCCC_AzureOpenAI_APIClient:
         vectors = response.json()["data"]
         return [v["embedding"] for v in vectors]
 		
-	#sample URL:  https://apim-emt-aip-prod-01.azure-api.net/openai/deployments/{mod-deployment-id}/chat/completions?api-version={api-version}
-    #def chat_completion():	#<-- complete this definition later
+    def chat_completion(self, user_question, context):
+        headers = {
+            "Ocp-Apim-Subscription-Key": f"{self.api_key}"
+        }
+        request_body = {
+        "messages": [
+            {
+                "role": "system",
+                "content": f"Use the provided context to answer the user question. Do not make up answers if you don't know, just say 'I don't know'.  CONTEXT: {context}"  
+            },
+            {"role": "user", "content": user_question}
+        ],
+        "max_tokens": 800,
+        "temperature": 0.0,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "top_p": 0.95,
+        "stop": None
+    }
+        response = requests.post(f"{self.api_url}/deployments/{self.api_mod_depId}/chat/completions?api-version={self.api_version}", json=request_body, headers=headers)
+        response.raise_for_status()        
 
-#Create Custom api_client
-api_client = TCCC_AzureOpenAI_APIClient(
-    api_key=AZURE_OPENAI_API_SUBSCRIPTION_KEY, 
-    api_url=AZURE_OPENAI_API_URL, 
-    api_mod_depId = AZURE_OPENAI_API_DEPLOYMENT_ID,
-    api_embed_depId = AZURE_OPENAI_API_EMBEDDING_DEPLOYMENT_ID,
-    api_version = AZURE_OPENAI_API_VERSION
-    )
+        # Get the "choices" list from response
+        choices = response.json()["choices"]
+    
+        # We just need the first choice
+        choice = choices[0]
+    
+        # Extract the message content 
+        answer = choice["message"]["content"]
 
+        return {
+            "result": answer,
+            "source_documents": []
+        }
 
 
 #In order to apply a custom extractor to our ConfluenceLoader, we need to create/extend our own custom ConfluenceLoader...
@@ -132,7 +206,23 @@ def extract_content_and_images(html):
     image_tags = soup.find_all('img')
     return text_content, image_tags
 
+#########################
+#MAIN RUNTIME FUNCTION
+#########################
 def main():
+
+    #Create Custom api_client
+    api_client = TCCC_AzureOpenAI_APIClient(
+    api_key=AZURE_OPENAI_API_SUBSCRIPTION_KEY, 
+    api_url=AZURE_OPENAI_API_URL, 
+    api_mod_depId = AZURE_OPENAI_API_DEPLOYMENT_ID,
+    api_embed_depId = AZURE_OPENAI_API_EMBEDDING_DEPLOYMENT_ID,
+    api_version = AZURE_OPENAI_API_VERSION
+    )
+
+    #Create Custom Embeddings Wrapper that consumes api_client
+    custom_embeddings = CustomEmbeddings(api_client=api_client)
+
     # Set the title and subtitle of the app
     st.title("🦜🔗 CHAT: OQT Wiki via COKE-API")
     st.image('./assets/Wiki-Pikture.png')
@@ -157,13 +247,6 @@ def main():
             if os.path.exists(DB_DIR) and os.path.isdir(DB_DIR):
                 shutil.rmtree(DB_DIR)
 
-            # # Create a Chroma vector database from the documents
-            # vectordb = Chroma.from_documents(documents=docs, 
-            #                                 embedding=openai_embeddings,
-            #                                 persist_directory=DB_DIR)
-            
-            # NEW SECTION 
-            custom_embeddings = CustomEmbeddings(api_client=api_client)
             vectordb = Chroma.from_documents(documents=docs, 
                                 embedding=custom_embeddings,
                                 persist_directory=DB_DIR)
@@ -174,7 +257,7 @@ def main():
     user_question = st.text_input("Ask a question (query/prompt)")
     if st.button("Submit Query", type="primary"):
 
-        vectordb = Chroma(embedding_function=openai_embeddings, persist_directory=DB_DIR)
+        vectordb = Chroma(embedding_function=custom_embeddings, persist_directory=DB_DIR)
 
         # Create a retriever from the Chroma vector database
         retriever = vectordb.as_retriever(search_kwargs={"k": 30})
@@ -182,10 +265,10 @@ def main():
         # Use a ChatOpenAI model
         llm = ChatOpenAI(model_name='gpt-4-turbo-preview')
 
-        # Create a RetrievalQA from the model and retriever
-        qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, return_source_documents=True)
-
-        # Run the prompt and return the response
+        # Create a CUSTOM RetrievalQA from the model and retriever
+        qa = CustomRetrievalQA.from_chain_type(api_client=api_client, llm=llm, chain_type="stuff", retriever=retriever, return_source_documents=True)
+        
+        # Run the prompt and return the response (this is where it makes the call out, now to API instead of Service)
         response = qa(user_question)
         st.subheader("Answer:")
         st.write(response["result"])
